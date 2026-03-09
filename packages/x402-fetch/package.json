@@ -1,0 +1,13 @@
+{
+  "name": "@m0/x402-fetch",
+  "version": "0.1.0",
+  "description": "Fetch client for AI agents paying with M0 Extension tokens via x402",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@m0/x402-core": "workspace:*",
+    "viem": "^2.21.0"
+  },
+  "license": "MIT"
+}

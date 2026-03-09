@@ -1,0 +1,12 @@
+{
+  "name": "@m0/x402-core",
+  "version": "0.1.0",
+  "description": "Core library for M0 Extension payment verification and settlement via x402",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "./dist",
+    "rootDir": ".",
+    "declaration": true,
+    "resolveJsonModule": true,
+    "paths": {
+      "@m0/x402-core": ["./packages/x402-core/src"],
+      "@m0/x402-express": ["./packages/x402-express/src"],
+      "@m0/x402-fetch": ["./packages/x402-fetch/src"]
+    }
+  },
+  "include": ["bin/**/*", "src/**/*"],
+  "exclude": ["node_modules", "dist", "test"]
+}

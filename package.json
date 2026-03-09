@@ -1,0 +1,38 @@
+{
+  "name": "m0-cli",
+  "version": "0.1.0",
+  "description": "Developer toolkit for M0 Stablecoin Extensions + x402 Agent Payments",
+  "type": "module",
+  "bin": {
+    "m0": "./dist/bin/m0.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest",
+    "lint": "tsc --noEmit",
+    "m0": "tsx bin/m0.ts"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "dependencies": {
+    "@inquirer/prompts": "^7.0.0",
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "handlebars": "^4.7.8",
+    "ora": "^8.0.1",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "MIT"
+}
