@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
-import { M0Facilitator, type ExtensionConfig } from "@m0/x402-core";
+import { M0Facilitator, type ExtensionConfig, type X402PaymentPayload } from "@m0/x402-core";
 
 export interface RoutePaymentConfig {
   price: string;
@@ -10,14 +10,19 @@ export interface RoutePaymentConfig {
 export interface M0PaymentMiddlewareConfig {
   routes: Record<string, RoutePaymentConfig>;
   seller: {
+    /** Address where payments land */
     treasury: string;
+    /** Preferred settlement token symbol (e.g. "wM") */
     preferredToken: string;
+    /** Auto-swap incoming tokens to preferred via SwapFacility */
     autoSwap: boolean;
   };
   facilitator: {
     rpcUrl: string;
     chain: "base" | "ethereum" | "arbitrum" | "optimism";
     extensions?: ExtensionConfig[];
+    /** Private key for settlement transactions (required for autoSwap) */
+    settlerPrivateKey?: `0x${string}`;
   };
 }
 
@@ -26,6 +31,7 @@ export function m0PaymentMiddleware(config: M0PaymentMiddlewareConfig) {
     rpcUrl: config.facilitator.rpcUrl,
     chain: config.facilitator.chain,
     supportedExtensions: config.facilitator.extensions ?? [],
+    settlerPrivateKey: config.facilitator.settlerPrivateKey,
   });
 
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -35,6 +41,7 @@ export function m0PaymentMiddleware(config: M0PaymentMiddlewareConfig) {
 
     const paymentHeader = req.headers["x-payment"] as string | undefined;
 
+    // ── No payment header → return 402 with payment requirements ──────────
     if (!paymentHeader) {
       const encoded = Buffer.from(
         JSON.stringify({
@@ -44,7 +51,7 @@ export function m0PaymentMiddleware(config: M0PaymentMiddlewareConfig) {
           resource: routeKey,
           description: route.description,
           payTo: config.seller.treasury,
-          maxTimeoutSeconds: 60,
+          maxTimeoutSeconds: 300,
           accepts: route.accepts,
         })
       ).toString("base64");
@@ -57,32 +64,65 @@ export function m0PaymentMiddleware(config: M0PaymentMiddlewareConfig) {
       });
     }
 
+    // ── Payment header present → verify ───────────────────────────────────
     try {
-      const payload = JSON.parse(
+      const raw = JSON.parse(
         Buffer.from(paymentHeader, "base64").toString()
-      ) as { token: string; amount: string; from: string; signature: string };
+      ) as Record<string, string>;
 
-      const result = await facilitator.verifyPayment({
-        token: payload.token,
-        amount: BigInt(payload.amount),
-        from: payload.from,
-        signature: payload.signature,
-      });
+      const payload: X402PaymentPayload = {
+        token: raw.token as `0x${string}`,
+        amount: BigInt(raw.amount),
+        from: raw.from as `0x${string}`,
+        to: raw.to as `0x${string}`,
+        signature: raw.signature as `0x${string}`,
+        nonce: raw.nonce as `0x${string}`,
+        validAfter: BigInt(raw.validAfter ?? "0"),
+        validBefore: BigInt(raw.validBefore ?? String(Math.floor(Date.now() / 1000) + 300)),
+        network: (raw.network as "base" | "ethereum" | "arbitrum" | "optimism") ?? config.facilitator.chain,
+      };
 
-      if (!result.valid) {
-        return res
-          .status(402)
-          .json({ error: "Verification failed", details: result.error });
+      const verification = await facilitator.verifyPayment(payload);
+
+      if (!verification.valid) {
+        return res.status(402).json({
+          error: "Payment verification failed",
+          details: verification.error,
+        });
       }
 
-      (req as Request & { m0Payment: unknown }).m0Payment = {
-        verified: true,
-        extension: result.extension,
-      };
+      // ── Settle payment ─────────────────────────────────────────────────
+      if (config.seller.autoSwap) {
+        const settlement = await facilitator.settlePayment(
+          payload,
+          config.seller.preferredToken
+        );
+        if (!settlement.success) {
+          return res.status(402).json({
+            error: "Payment settlement failed",
+            details: settlement.error,
+          });
+        }
+        (req as Request & { m0Payment: unknown }).m0Payment = {
+          verified: true,
+          settled: true,
+          txHash: settlement.txHash,
+          extension: verification.extension,
+          method: settlement.method,
+        };
+      } else {
+        (req as Request & { m0Payment: unknown }).m0Payment = {
+          verified: true,
+          settled: false,
+          extension: verification.extension,
+          payload,
+        };
+      }
+
       return next();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      return res.status(402).json({ error: "Invalid payment", details: msg });
+      return res.status(402).json({ error: "Invalid payment payload", details: msg });
     }
   };
 }

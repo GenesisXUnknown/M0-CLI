@@ -1,14 +1,16 @@
 import { Command } from "commander";
-import { execSync } from "node:child_process";
+import chalk from "chalk";
+import ora from "ora";
 import { log } from "../lib/logger.js";
-import { readConfig, updateConfig, configExists } from "../lib/config.js";
+import { readConfig, updateConfig, configExists, getRpcUrl } from "../lib/config.js";
 import { getChain } from "../lib/chains.js";
+import { checkForge, forgeBuild, forgeScript } from "../lib/forge.js";
 
 export const deployCommand = new Command("deploy")
   .description("Deploy your M0 Extension contract")
-  .option("-n, --network <network>", "Target network")
-  .option("--dry-run", "Simulate only")
-  .option("--verify", "Verify on explorer")
+  .option("-n, --network <network>", "Target network (overrides config)")
+  .option("--dry-run", "Simulate without broadcasting")
+  .option("--verify", "Verify source on block explorer")
   .action(async (opts) => {
     if (!configExists()) {
       log.error("No M0 project. Run 'm0 init' first.");
@@ -17,56 +19,99 @@ export const deployCommand = new Command("deploy")
 
     const config = readConfig();
     if (!config.treasury) {
-      log.error("Treasury not set. Run 'm0 configure'.");
+      log.error("Treasury address not set. Run 'm0 configure' first.");
       process.exit(1);
     }
 
-    const network = opts.network ?? config.chain;
+    const network = (opts.network as string | undefined) ?? config.chain;
     const chainConfig = getChain(network);
+    const rpcUrl = getRpcUrl(network);
+
+    if (!rpcUrl) {
+      log.error(
+        `No RPC URL for ${network}. ` +
+          `Set ${network.toUpperCase().replace(/-/g, "_")}_RPC_URL in your .env`
+      );
+      process.exit(1);
+    }
 
     log.header(`Deploying ${config.name} to ${chainConfig.name}`);
+    if (opts.dryRun) log.warn("Dry-run mode — no transactions will be sent.");
 
-    log.step(1, "Compiling...");
+    // ── Step 1: Check Foundry ────────────────────────────────────────────────
+    let spinner = ora("Checking Foundry...").start();
     try {
-      execSync("forge build", { stdio: "inherit" });
-    } catch {
-      log.error("Compilation failed.");
+      checkForge();
+      spinner.succeed("Foundry found");
+    } catch (e: unknown) {
+      spinner.fail("Foundry not installed");
+      log.error(e instanceof Error ? e.message : String(e));
       process.exit(1);
     }
 
-    log.step(2, "Deploying...");
-    const cap = config.name.charAt(0).toUpperCase() + config.name.slice(1);
-    const rpcVar = network.toUpperCase().replace(/-/g, "_") + "_RPC_URL";
-    const args = [
-      `forge script script/Deploy${cap}.s.sol`,
-      `--rpc-url $${rpcVar}`,
-    ];
-    if (!opts.dryRun) args.push("--broadcast");
-    if (opts.verify) args.push("--verify");
-
+    // ── Step 2: Compile ──────────────────────────────────────────────────────
+    spinner = ora("Compiling contracts...").start();
     try {
-      const output = execSync(args.join(" "), {
-        stdio: "pipe",
-        encoding: "utf-8",
+      forgeBuild();
+      spinner.succeed("Contracts compiled");
+    } catch (e: unknown) {
+      spinner.fail("Compilation failed");
+      log.error(e instanceof Error ? e.message : String(e));
+      process.exit(1);
+    }
+
+    // ── Step 3: Deploy ───────────────────────────────────────────────────────
+    const cap = config.name.charAt(0).toUpperCase() + config.name.slice(1);
+    const scriptPath = `script/Deploy${cap}.s.sol`;
+    const broadcast = !(opts.dryRun as boolean | undefined);
+
+    spinner = ora(broadcast ? "Deploying..." : "Simulating...").start();
+    try {
+      const result = forgeScript({
+        script: scriptPath,
+        rpcUrl,
+        broadcast,
+        verify: opts.verify as boolean | undefined,
+        etherscanKey:
+          process.env.ETHERSCAN_API_KEY ?? process.env.BASESCAN_API_KEY,
       });
-      const match = output.match(/Proxy:\s+(0x[a-fA-F0-9]{40})/);
-      if (match) {
+
+      if (result.proxyAddress) {
+        spinner.succeed("Deployed!");
         updateConfig({
           deployed: true,
-          contractAddress: match[1],
+          contractAddress: result.proxyAddress,
           deployedAt: new Date().toISOString(),
         });
-        log.success("Deployed!");
-        log.label("Contract", match[1]);
-        log.label("Explorer", `${chainConfig.explorer}/address/${match[1]}`);
-        log.dim("Next: m0 governance apply-earner");
+
+        console.log();
+        log.box(
+          [
+            chalk.bold(`${config.name} (${config.symbol}) deployed`),
+            "",
+            `Proxy:          ${chalk.cyan(result.proxyAddress)}`,
+            result.implementationAddress
+              ? `Implementation: ${chalk.cyan(result.implementationAddress)}`
+              : "",
+            `Chain:          ${chainConfig.name}`,
+            `Explorer:       ${chainConfig.explorer}/address/${result.proxyAddress}`,
+            "",
+            chalk.dim("Next steps:"),
+            chalk.dim("  1. m0 governance apply-earner"),
+            chalk.dim("  2. (wait for TTG approval)"),
+            chalk.dim("  3. m0 yield enable"),
+          ].filter(Boolean) as string[]
+        );
+      } else if (!broadcast) {
+        spinner.succeed("Simulation complete (nothing broadcast)");
+        log.raw(result.rawOutput);
       } else {
-        console.log(output);
-        log.warn("May have succeeded — check forge output.");
+        spinner.warn("Deploy may have succeeded — check output below:");
+        log.raw(result.rawOutput);
       }
     } catch (e: unknown) {
-      log.error("Deployment failed.");
-      if (e && typeof e === "object" && "stdout" in e) console.log(e.stdout);
+      spinner.fail("Deployment failed");
+      log.error(e instanceof Error ? e.message : String(e));
       process.exit(1);
     }
   });

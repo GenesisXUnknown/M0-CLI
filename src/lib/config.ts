@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { M0ProjectConfig } from "../types/index.js";
+import { CHAINS } from "./chains.js";
 
 const CONFIG_DIR = ".m0";
 const CONFIG_FILE = "config.json";
@@ -69,4 +70,36 @@ export function updateConfig(
   const updated = { ...config, ...updates };
   writeConfig(updated, projectDir);
   return updated;
+}
+
+// ─── Environment helpers ──────────────────────────────────────────────────────
+
+/**
+ * Reads the deployer private key from the environment.
+ * The key is NEVER stored in config — only in the .env file.
+ */
+export function getDeployerKey(): `0x${string}` {
+  const key = process.env.PRIVATE_KEY;
+  if (!key) {
+    throw new Error(
+      'PRIVATE_KEY environment variable is not set.\n' +
+        'Add it to your .env file: PRIVATE_KEY=0x...'
+    );
+  }
+  return (key.startsWith("0x") ? key : `0x${key}`) as `0x${string}`;
+}
+
+/**
+ * Resolves the RPC URL for a given chain name.
+ * Looks for `<CHAIN>_RPC_URL` in the environment first,
+ * then falls back to `RPC_URL`, then the public default.
+ */
+export function getRpcUrl(chainName: string): string {
+  const envKey = `${chainName.toUpperCase().replace(/-/g, "_")}_RPC_URL`;
+  return (
+    process.env[envKey] ??
+    process.env.RPC_URL ??
+    CHAINS[chainName]?.rpcUrl ??
+    ""
+  );
 }
